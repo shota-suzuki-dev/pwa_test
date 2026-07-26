@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>回想</title>
+
+<!-- ① manifest：ホーム画面に追加するための情報 -->
+<link rel="manifest" href="./manifest.webmanifest">
+<!-- iOS はこれを見てアイコンを決める -->
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
+<meta name="theme-color" content="#10131C">
+
+<style>
+  :root{
+    --ink:#10131C; --veil:#191E2B; --line:#2A3142;
+    --mist:#7A849B; --paper:#E7E4DD; --ember:#E3A857;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--ink); color:var(--paper);
+    font-family:"Hiragino Sans","Yu Gothic",system-ui,sans-serif;
+    padding:28px 22px 60px; line-height:1.9;
+    -webkit-font-smoothing:antialiased;
+  }
+  main{max-width:560px;margin:0 auto}
+  h1{
+    font-family:"Hiragino Mincho ProN","Yu Mincho",serif;
+    font-size:20px; letter-spacing:.34em; font-weight:400; margin:0 0 28px;
+  }
+  .step{border-top:1px solid var(--line); padding:20px 0}
+  .step h2{font-size:13px; letter-spacing:.08em; color:var(--mist); margin:0 0 10px; font-weight:400}
+  .state{font-size:13px; color:var(--mist)}
+  .ok{color:var(--ember)}
+  button{
+    font-family:inherit; font-size:13px; letter-spacing:.06em;
+    padding:11px 20px; margin-top:12px; cursor:pointer;
+    background:transparent; border:1px solid var(--ember); color:var(--ember);
+  }
+  button:disabled{border-color:var(--line); color:#4A5266; cursor:default}
+  textarea{
+    width:100%; min-height:150px; margin-top:12px; padding:12px;
+    background:var(--veil); border:1px solid var(--line); color:var(--paper);
+    font-family:ui-monospace,monospace; font-size:11px; line-height:1.6;
+  }
+  p{margin:6px 0}
+  .hint{font-size:12px; color:#5C6478}
+</style>
+</head>
+<body>
+<main>
+  <h1>回想</h1>
+
+  <div class="step">
+    <h2>1. ホーム画面に追加</h2>
+    <p class="state" id="s-standalone">確認中</p>
+    <p class="hint">iOS では、Safari の共有ボタン →「ホーム画面に追加」を行わないと通知を受け取れません。追加後は、ホーム画面のアイコンから開いてください。</p>
+  </div>
+
+  <div class="step">
+    <h2>2. Service Worker</h2>
+    <p class="state" id="s-sw">確認中</p>
+  </div>
+
+  <div class="step">
+    <h2>3. 通知を許可して購読</h2>
+    <p class="state" id="s-sub">未購読</p>
+    <button id="btn-sub">通知を有効にする</button>
+    <p class="hint">許可ダイアログはボタン操作からしか出せません（iOS の制約）。</p>
+  </div>
+
+  <div class="step">
+    <h2>4. 購読情報をコピー</h2>
+    <p class="hint">下の JSON をまるごとコピーし、GitHub の Secrets に <code>PUSH_SUBSCRIPTION</code> として登録してください。単独利用なのでサーバー側の DB は不要です。</p>
+    <textarea id="out" readonly placeholder="購読するとここに表示されます"></textarea>
+    <button id="btn-copy" disabled>コピー</button>
+  </div>
+
+  <div class="step">
+    <h2>5. 動作確認</h2>
+    <button id="btn-test">ローカル通知を出す</button>
+    <p class="hint">これは端末内だけで完結するテストです。ここが通れば、通知の見た目とタップ後の遷移を確認できます。</p>
+  </div>
+</main>
+
+<script>
+// ▼ ここに `npx web-push generate-vapid-keys` で出た publicKey を貼る
+const VAPID_PUBLIC = 'ここにVAPID公開鍵';
+
+const $ = id => document.getElementById(id);
+
+// base64url の公開鍵を Uint8Array に変換する（Push API がこの形式を要求する）
+function urlB64ToUint8(b64){
+  const pad = '='.repeat((4 - b64.length % 4) % 4);
+  const s = (b64 + pad).replace(/-/g,'+').replace(/_/g,'/');
+  const raw = atob(s);
+  return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
+}
+
+// --- 1. ホーム画面から開かれているか
+const standalone = window.matchMedia('(display-mode: standalone)').matches
+                || window.navigator.standalone === true;
+$('s-standalone').textContent = standalone
+  ? 'ホーム画面から開かれています'
+  : 'ブラウザのタブで開かれています（このままでは通知を受け取れません）';
+if (standalone) $('s-standalone').classList.add('ok');
+
+// --- 2. Service Worker を登録する
+let reg = null;
+async function boot(){
+  if (!('serviceWorker' in navigator)) { $('s-sw').textContent = '非対応'; return; }
+  try {
+    // 相対パスにすること。GitHub Pages はサブディレクトリ配信になるため
+    reg = await navigator.serviceWorker.register('./sw.js');
+    await navigator.serviceWorker.ready;
+    $('s-sw').textContent = '登録済み';
+    $('s-sw').classList.add('ok');
+    const sub = await reg.pushManager.getSubscription();
+    if (sub) showSub(sub);
+  } catch (e) {
+    $('s-sw').textContent = '登録失敗: ' + e.message;
+  }
+}
+
+function showSub(sub){
+  $('s-sub').textContent = '購読済み';
+  $('s-sub').classList.add('ok');
+  $('out').value = JSON.stringify(sub.toJSON(), null, 2);
+  $('btn-copy').disabled = false;
+  $('btn-sub').disabled = true;
+}
+
+// --- 3. 許可を取り、購読する
+$('btn-sub').onclick = async () => {
+  if (!reg) return;
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') { $('s-sub').textContent = '許可されませんでした'; return; }
+  try {
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true, // iOS は必須。受信したら必ず通知を表示する約束
+      applicationServerKey: urlB64ToUint8(VAPID_PUBLIC)
+    });
+    showSub(sub);
+  } catch (e) {
+    $('s-sub').textContent = '購読失敗: ' + e.message;
+  }
+};
+
+$('btn-copy').onclick = async () => {
+  await navigator.clipboard.writeText($('out').value);
+  $('btn-copy').textContent = 'コピーしました';
+};
+
+// --- 5. サーバーを介さないテスト
+$('btn-test').onclick = async () => {
+  if (Notification.permission !== 'granted') await Notification.requestPermission();
+  if (!reg) return;
+  reg.showNotification('回想', {
+    body: '読んでいて手が止まった一文が、ここに出ます。',
+    icon: './icon-192.png',
+    data: { url: './?test=1' }
+  });
+};
+
+boot();
+</script>
+</body>
+</html>

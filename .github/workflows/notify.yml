@@ -1,0 +1,29 @@
+name: notify
+
+on:
+  schedule:
+    # UTC で毎時0分に起動する。JST への変換と時間帯の判定は send.js 側で行う。
+    # 注意: GitHub の cron は数分〜数十分遅れることがある。正確な時刻には使えない。
+    - cron: '0 * * * *'
+  # 手動実行。テスト用。確率と時間帯の判定を無視して必ず送る。
+  workflow_dispatch:
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - run: npm install web-push --no-save
+
+      - run: node tools/send.js
+        env:
+          VAPID_PUBLIC:      ${{ secrets.VAPID_PUBLIC }}
+          VAPID_PRIVATE:     ${{ secrets.VAPID_PRIVATE }}
+          VAPID_SUBJECT:     ${{ secrets.VAPID_SUBJECT }}
+          PUSH_SUBSCRIPTION: ${{ secrets.PUSH_SUBSCRIPTION }}
+          FORCE:             ${{ github.event_name == 'workflow_dispatch' && '1' || '' }}
